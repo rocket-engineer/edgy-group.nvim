@@ -1,4 +1,5 @@
 local Config = require('edgy.config')
+local Editor = require('edgy.editor')
 local Util = require('edgy.util')
 
 -- Define groups of edgebar views by title
@@ -44,9 +45,36 @@ end
 ---@param titles string[]
 ---@return Edgy.View[]
 local function filter_by_titles(views, titles)
-  return vim.tbl_filter(function(view)
-    return vim.tbl_contains(titles, view.title)
-  end, views)
+  -- return vim.tbl_filter(function(view)
+  --   return vim.tbl_contains(titles, view.title)
+  -- end, views)
+
+  local output = {}
+  for _, title in pairs(titles) do
+    for _, view in pairs(views) do
+      if view.title == title then table.insert(output, view) end
+    end
+  end
+  return output
+end
+
+function array_remove(t, fnKeep)
+  local j, n = 1, #t
+
+  for i = 1, n do
+    if fnKeep(t, i, j) then
+      -- Move i's kept value to j's position, if it's not already there.
+      if i ~= j then
+        t[j] = t[i]
+        t[i] = nil
+      end
+      j = j + 1 -- Increment position of where we'll place the next kept value.
+    else
+      t[i] = nil
+    end
+  end
+
+  return t
 end
 
 -- Open window from open function
@@ -65,6 +93,7 @@ end
 ---@param pos Edgy.Pos
 ---@param titles string[]
 function M.close_edgebar_views_by_titles(pos, titles)
+  -- print('Close views by pos and titles:', pos, vim.inspect(titles))
   local edgebar = Config.layout[pos]
   if edgebar ~= nil then
     local views = filter_by_titles(edgebar.views, titles)
@@ -88,6 +117,7 @@ end
 ---@param pos Edgy.Pos
 ---@param titles string[]
 function M.open_edgebar_views_by_titles(pos, titles)
+  -- print('Open views by pos and titles:', pos, vim.inspect(titles))
   local edgebar = Config.layout[pos]
   if edgebar ~= nil then
     local views = filter_by_titles(edgebar.views, titles)
@@ -120,25 +150,65 @@ end
 ---@param index number Index relative to the group at given position
 ---@param toggle? boolean either to toggle already selected group or not
 function M.open_group_index(pos, index, toggle)
+  -- print('Open: ', pos, index, toggle)
+
   local g = M.groups_by_pos[pos]
   local indexed_group = g and g.groups[index]
-  if indexed_group then
-    -- Close all windows if at least one window of the currently selection group is open
-    local toggle_edgebar = toggle == nil and M.toggle or toggle
-    if toggle_edgebar and index == g.selected_index and M.is_one_window_open(pos, indexed_group.titles) then
-      M.close_edgebar_views_by_titles(pos, indexed_group.titles)
-    else
-      local other_groups = vim.tbl_filter(function(group)
-        return group.icon ~= indexed_group.icon
-      end, g.groups)
-      local other_groups_titles = vim.tbl_map(function(group)
-        return group.titles
-      end, other_groups)
+  -- print('Open Group: ', vim.inspect(indexed_group))
 
-      M.open_edgebar_views_by_titles(pos, indexed_group.titles)
-      M.close_edgebar_views_by_titles(pos, vim.iter(other_groups_titles):flatten():totable())
-      g.selected_index = index
+  if indexed_group then
+    -- print('Requested open views by titles: ', vim.inspect(indexed_group.titles))
+
+    local get_view_by_win = function(win)
+      win = win or vim.api.nvim_get_current_win()
+      for _, edgebar in pairs(Config.layout) do
+        for _, w in ipairs(edgebar.wins) do
+          if w.win == win then return w.view end
+        end
+      end
     end
+
+    local wins = Editor.list_wins()
+    -- print('Check:', vim.inspect(wins))
+
+    local current_views_by_titles = {}
+    for _, win in pairs(wins.edgy) do
+      -- print('Win:', win)
+      local view = get_view_by_win(win)
+      -- print('  Title:', view.title)
+      -- print('  Pos:  ', view.edgebar.pos)
+      -- print('  Win:  ', win)
+      if view.edgebar.pos == pos then table.insert(current_views_by_titles, view.title) end
+    end
+    -- print('Current views by titles: ', vim.inspect(current_views_by_titles))
+
+    local close_views_by_titles = vim.tbl_deep_extend('force', current_views_by_titles, {})
+    array_remove(close_views_by_titles, function(titles, i, _)
+      local title = titles[i]
+      for _, requested_title in pairs(indexed_group.titles) do
+        if requested_title == title then return false end
+      end
+      return true
+    end)
+    -- print('Close views by titles: ', vim.inspect(close_views_by_titles))
+
+    -- local open_views_by_titles = vim.tbl_deep_extend('force', indexed_group.titles, {})
+    -- array_remove(open_views_by_titles, function(titles, i, _)
+    --   local title = titles[i]
+    --   for _, current_title in pairs(current_views_by_titles) do
+    --     if current_title == title then return false end
+    --   end
+    --   return true
+    -- end)
+    -- open_views_by_titles = vim.iter(open_views_by_titles):flatten():totable()
+    -- print('Open views by titles: ', vim.inspect(open_views_by_titles))
+    -- M.open_edgebar_views_by_titles(pos, open_views_by_titles)
+
+    M.close_edgebar_views_by_titles(pos, close_views_by_titles)
+    M.open_edgebar_views_by_titles(pos, indexed_group.titles)
+
+    -- g.selected_index = index
+    -- print(vim.inspect({}))
   end
 end
 
@@ -161,7 +231,10 @@ function M.open_groups_by_key(key, opts)
   local opts = opts or {}
   local toggle_group = opts.toggle == nil and M.toggle or opts.toggle
   vim.iter(M.get_groups_by_key(key, opts.position)):each(function(group)
-    pcall(M.open_group_index, group.position, group.index, toggle_group)
+    -- pcall(M.open_group_index, group.position, group.index, toggle_group)
+    vim.schedule(function()
+      M.open_group_index(group.position, group.index, toggle_group)
+    end)
   end)
 end
 
